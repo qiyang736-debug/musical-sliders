@@ -30,7 +30,7 @@ async function renderScore(score){
 function stopScorePlayback(){
  scoreGeneration++;
  const p=scorePlayback;if(!p)return;scorePlayback=null;
- cancelAnimationFrame(p.frame);if(p.source){p.source.onended=null;try{p.source.stop();}catch{}p.source.disconnect();}p.gain?.disconnect();p.button.textContent=p.button.dataset.label||'播放乐谱';
+ cancelAnimationFrame(p.frame);if(p.source){p.source.onended=null;try{p.source.stop();}catch{}p.source.disconnect();}p.gain?.disconnect();p.button.textContent=p.button.dataset.label||'奏响此刻';
 }
 function syncScoreMute(){if(scorePlayback?.gain)scorePlayback.gain.gain.setTargetAtTime(muted?0:1,audioContext.currentTime,.01);}
 function pauseScorePlayback(){const p=scorePlayback;if(!p||p.paused)return;p.offset=Math.min(p.score.duration,p.offset+audioContext.currentTime-p.started);p.paused=true;p.source.onended=null;p.source.stop();p.source.disconnect();p.gain.disconnect();cancelAnimationFrame(p.frame);p.button.textContent=p.button.dataset.label?p.button.dataset.label+' · 继续':'继续播放';}
@@ -46,7 +46,7 @@ async function toggleScorePlayback(score,button){
  const generation=scoreGeneration;button.textContent=button.dataset.label?button.dataset.label+' · 准备中':'准备播放…';
  scorePlayback={score,button,loading:true,offset:0,frame:0};
  try{unlockAudio();await audioContext.resume();const buffer=await renderScore(score);if(generation!==scoreGeneration)return;
-  Object.assign(scorePlayback,{buffer,loading:false});displayedAudioScore=score;displayScore=score.graphics||[];scorePlayhead=0;scoreOffset=0;resumeScorePlayback();
+  Object.assign(scorePlayback,{buffer,loading:false});displayedAudioScore=score;displayScore=score.graphics||[];if(displayScore.length&&typeof forgetEcho==='function')forgetEcho();scorePlayhead=0;scoreOffset=0;resumeScorePlayback();
  }catch(error){if(generation!==scoreGeneration)return;stopScorePlayback();button.textContent='重试播放';console.warn('Score playback:',error.message);}
 }
 function downloadBlob(blob,name){
@@ -86,7 +86,20 @@ function scannedScore(graphics){
  const duration=Math.max(...events.map(e=>e.time+timbres[e.instrument||'pluck'].attack+timbres[e.instrument||'pluck'].decay+.05));
  return{events,duration,graphics:graphics.map((e,i)=>({...e,time:(starts[i]-origin)/SCORE_SCAN_SPEED}))};
 }
-document.querySelector('#download-music').addEventListener('click',async event=>{const button=event.currentTarget;button.disabled=true;button.textContent='生成音乐…';button.title='';try{const score=scannedScore(displayScore||scoreEvents);if(!score.events.length)return;const buffer=await renderScore(score);downloadBlob(await mp3Blob(buffer),'musical-score.mp3');}catch(error){console.error('Music export failed:',error);button.textContent='下载失败，重试';button.title=error.message;}finally{button.disabled=false;if(button.textContent==='生成音乐…')button.textContent='下载音乐';}});
+document.querySelector('#download-music').addEventListener('click',async event=>{const button=event.currentTarget;button.disabled=true;button.textContent='生成中…';button.title='';try{const score=scannedScore(displayScore||scoreEvents);if(!score.events.length)return;const buffer=await renderScore(score);downloadBlob(await mp3Blob(buffer),'musical-score.mp3');}catch(error){console.error('Music export failed:',error);button.textContent='下载失败，重试';button.title=error.message;}finally{button.disabled=false;if(button.textContent==='生成中…')button.textContent='余音绕梁';}});
+document.querySelector('#echo-score').addEventListener('click',async event=>{
+ const button=event.currentTarget;if(!lastEcho||echoCapture)return;
+ button.disabled=true;button.textContent='生成回响…';button.title='';
+ try{
+  unlockAudio();if(audioContext)await audioContext.resume();
+  let buffer=null;
+  if(lastEchoBlob?.size){try{buffer=await audioContext.decodeAudioData(await lastEchoBlob.arrayBuffer());}catch(error){console.warn('Echo decode:',error.message);}}
+  if(!buffer)buffer=lastEchoBuffer||await renderEcho(lastEcho);
+  if(!buffer)return;
+  downloadBlob(await mp3Blob(buffer),'musical-echo.mp3');
+ }catch(error){console.error('Echo export failed:',error);button.textContent='下载失败，重试';button.title=error.message;}
+ finally{if(lastEcho&&!echoCapture){button.disabled=false;if(button.textContent==='生成回响…')button.textContent='回响';button.title='下载从有到无的回响';}else if(!lastEcho)forgetEcho();}
+});
 window.addEventListener('pagehide',stopScorePlayback);
 
 const speedSelect=document.querySelector('#score-speed');

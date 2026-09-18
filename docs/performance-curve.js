@@ -9,7 +9,7 @@ function scoreColor(pitch){return document.documentElement.dataset.theme==='ligh
 const scoreEvents=[];
 let scoreEpoch=null,scoreFrame=0,scoreOffset=null,displayScore=null,scorePlayhead=null,hoverFlower=null;
 const slideTimes=new Map();
-let hoverFlowers=new Set(),particles=[],particleStart=0,clearingFlowers=[],clearVoices=[],clearOutput=null,clearClock=null;
+let hoverFlowers=new Set(),particles=[],particleStart=0,clearingFlowers=[],clearVoices=[],clearOutput=null,clearClock=null,echoHold=false;
 function rosePoints(k){
  const end=k%2?Math.PI:Math.PI*2,count=128*k,points=[];
  for(let i=0;i<=count;i++){const a=end*i/count,r=Math.sin(k*a);points.push({x:r*Math.cos(a),y:r*Math.sin(a)});}
@@ -18,17 +18,17 @@ function rosePoints(k){
 }
 const roses=Array.from({length:8},(_,i)=>rosePoints(i+1));
 function recordMusicNote(f,strength,kind='note',group=null){
+ if(echoHold)return;
  const now=performance.now()/1000,pitch=scoreFrequencies.reduce((best,v,i)=>Math.abs(v-f)<Math.abs(scoreFrequencies[best]-f)?i:best,0);
  if(kind==='slide'&&now-(slideTimes.get(pitch)??-Infinity)<.2)return;
  if(kind==='slide')slideTimes.set(pitch,now);
  if(scoreEpoch===null)scoreEpoch=now;
  const last=scoreEvents.at(-1),time=now-scoreEpoch;
- // Keep overlapping petals readable: dense chords and long pauses both have bounded spacing.
  const position=group&&last?.group===group?last.position:last?last.position+Math.max(20,Math.min(38,(time-last.time)*70)):0;
  displayScore=null;scorePlayhead=null;scoreOffset=null;
  const sound=typeof liveScore!=='undefined'?{...liveScore.at(-1)}:null;
  scoreEvents.push({time,absolute:now,pitch,strength:Math.max(0,Math.min(1,strength)),position,sound,group,volumeY:group?strength:null});
- 
+ forgetEcho();
  if(!scoreFrame)scoreFrame=requestAnimationFrame(drawMusicScore);
 }
 function noteShape(ctx,pitch,x,y,r){
@@ -38,7 +38,9 @@ function drawMusicScore(){
  scoreFrame=0;
  const w=musicCanvas.clientWidth||580,h=musicCanvas.clientHeight||170,dpr=Math.min(window.devicePixelRatio||1,2),ctx=musicContext;
  musicCanvas.width=Math.round(w*dpr);musicCanvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
- ctx.globalAlpha=1;ctx.strokeStyle=document.documentElement.dataset.theme==='light'?'#bbb7c5':'#514a5e';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(0,h-12);ctx.lineTo(w,h-12);ctx.stroke();
+ ctx.globalAlpha=1;ctx.strokeStyle=document.documentElement.dataset.theme==='light'?'#bbb7c5':'#514a5e';ctx.lineWidth=.7;
+ ctx.beginPath();ctx.moveTo(0,.35);ctx.lineTo(w,.35);ctx.stroke();
+ ctx.beginPath();ctx.moveTo(0,h-12);ctx.lineTo(w,h-12);ctx.stroke();
  const events=displayScore||scoreEvents,origin=events[0]?.position||0;
  const left=27,right=w-27,maxOffset=Math.max(0,(events.at(-1)?.position||0)-origin-(right-left)),offset=scoreOffset===null?maxOffset:Math.max(0,Math.min(maxOffset,scoreOffset));
  ctx.save();ctx.beginPath();ctx.rect(0,13,w,h-26);ctx.clip();
@@ -50,7 +52,7 @@ function drawMusicScore(){
   noteShape(ctx,event.pitch,x,y,lit?25:23);ctx.shadowBlur=0;
  }
  ctx.restore();ctx.globalAlpha=1;
- const age=clearClock?Math.max(0,audioContext.currentTime-clearClock.start):(performance.now()-particleStart)/1000;
+ const age=audioContext&&clearClock?Math.max(0,audioContext.currentTime-clearClock.start):(performance.now()-particleStart)/1000;
  clearingFlowers=clearingFlowers.filter(f=>age<f.delay);
  for(const f of clearingFlowers){ctx.globalAlpha=f.alpha;ctx.strokeStyle=scoreColor(f.pitch);ctx.lineWidth=1.05;noteShape(ctx,f.pitch,f.x,f.y,23);}
  particleCanvas.width=Math.round(w*dpr);particleCanvas.height=Math.round((h+800)*dpr);particleCanvas.style.height=(h+800)+'px';
@@ -61,21 +63,19 @@ function drawMusicScore(){
   particleCtx.globalAlpha=p.alpha*fade;particleCtx.fillStyle=scoreColor(p.pitch);
   particleCtx.beginPath();particleCtx.arc(x,y,p.size,0,Math.PI*2);particleCtx.fill();
  }
- ctx.globalAlpha=1;if((particles.length||clearingFlowers.length)&&!scoreFrame)scoreFrame=requestAnimationFrame(drawMusicScore);
+ if(echoCapture&&age>.08&&!clearingFlowers.length&&!particles.length)endEchoCapture();
+ ctx.globalAlpha=1;if((particles.length||clearingFlowers.length||echoCapture)&&!scoreFrame)scoreFrame=requestAnimationFrame(drawMusicScore);
 }
 new ResizeObserver(()=>{document.querySelector('.panel').style.setProperty('--score-width',musicCanvas.clientWidth+'px');if(!scoreFrame)scoreFrame=requestAnimationFrame(drawMusicScore);}).observe(musicCanvas);
 let SCORE_SCAN_SPEED=260;
-const CLEAR_SCAN_FAST=85,CLEAR_SCAN_SLOW=17,CLEAR_MIN=2,CLEAR_MAX=10;
+const CLEAR_ENTRY=.32,CLEAR_HOLD_START=1.1,CLEAR_HOLD_END=2.8,CLEAR_MIN=2,CLEAR_MAX=10;
 function clearDuration(count){return Math.min(CLEAR_MAX,Math.max(CLEAR_MIN,CLEAR_MIN+(count-1)*.12));}
-function clearScanSpeed(count){
- const t=(clearDuration(count)-CLEAR_MIN)/(CLEAR_MAX-CLEAR_MIN);
- return CLEAR_SCAN_FAST+(CLEAR_SCAN_SLOW-CLEAR_SCAN_FAST)*t;
-}
 function clearTone(e){
  const sound=e.sound;
  if(sound?.kind==='note')return {f:sound.f,strength:sound.strength,volume:sound.volume,instrument:sound.instrument};
  return {f:scoreFrequencies[e.pitch],strength:e.strength,volume:sound?.volume??1,instrument:sound?.instrument||instrument};
 }
+function clearNoteLength(e){const p=timbres[clearTone(e).instrument||instrument];return p.attack+p.decay;}
 function verticalClearSequence(events,h){
  const ordered=[...events].sort((a,b)=>flowerY(a,h)-flowerY(b,h)||a.position-b.position);
  if(!ordered.length)return [];
@@ -85,36 +85,106 @@ function verticalClearSequence(events,h){
   if(last&&y-last.y<1.5)last.events.push(event);
   else rows.push({y,events:[event]});
  }
- const gaps=rows.length-1,ySpan=rows.at(-1).y-rows[0].y,speed=clearScanSpeed(events.length);
- const naturalEnd=gaps&&ySpan>0?ySpan/speed:0;
- const scanTime=gaps?Math.min(CLEAR_MAX,Math.max(CLEAR_MIN,Math.max(naturalEnd,clearDuration(events.length)))):0;
- const extra=gaps&&scanTime>naturalEnd?(scanTime-naturalEnd)/gaps:0;
- const scale=naturalEnd>0&&scanTime<naturalEnd?scanTime/naturalEnd:1;
- return rows.flatMap((row,i)=>{
-  const delay=(ySpan>0?(row.y-rows[0].y)/speed:0)*scale+extra*i;
-  return row.events.map(event=>({event,delay}));
+ const sequence=[];let delay=0;
+ rows.forEach((row,i)=>{
+  const mix=rows.length<2?1:i/(rows.length-1),hold=CLEAR_HOLD_START+(CLEAR_HOLD_END-CLEAR_HOLD_START)*mix;
+  const natural=Math.max(...row.events.map(clearNoteLength)),volume=1-.5*i/Math.max(1,rows.length-1);
+  for(const event of row.events)sequence.push({event,delay,volume,length:clearNoteLength(event)*hold});
+  delay+=natural*CLEAR_ENTRY;
  });
+ return sequence;
 }
+function echoDuration(sequence){return sequence.reduce((max,{delay,length})=>Math.max(max,delay+length+.15),0);}
+function scheduleEcho(sequence,output,t,options={}){
+ const duration=echoDuration(sequence);
+ output.gain.setValueAtTime(.25,t);
+ if(duration>.05)output.gain.setValueCurveAtTime(Float32Array.from({length:33},(_,j)=>{const p=j/32,rise=.38+.62*Math.sin(Math.min(1,p/.42)*Math.PI/2),fall=p<.46?1:Math.pow(1-(p-.46)/.54,1.15);return .65*rise*fall;}),t,duration);
+ const voices=[];
+ for(const {event:e,delay,volume,length} of sequence){
+  const tone=clearTone(e);
+  voices.push(...(playTone(tone.f,tone.strength,tone.volume*volume,{context:options.context,output,when:t+delay,fadeUntil:t+delay+length,instrument:tone.instrument,capture:false})||[]));
+ }
+ return {duration,voices};
+}
+async function renderEcho(sequence){
+ if(!sequence?.length)return null;
+ const duration=Math.max(.2,echoDuration(sequence));
+ const Offline=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+ if(!Offline)throw Error('当前浏览器无法导出回响');
+ const context=new Offline(1,Math.max(1,Math.ceil(duration*44100)),44100);
+ const output=context.createGain(),limiter=context.createDynamicsCompressor();output.connect(limiter);limiter.connect(context.destination);
+ scheduleEcho(sequence,output,0,{context});
+ return context.startRendering();
+}
+function scoreSnapshot(){
+ const shown=displayScore?.length?displayScore:null;
+ if(shown&&shown.length>=scoreEvents.length)return shown.slice();
+ return scoreEvents.slice();
+}
+let lastEcho=null,lastEchoBuffer=null,lastEchoBlob=null,echoCapture=null,echoCaptureTimer=0,echoCaptureDest=null;
+const echoButton=document.querySelector('#echo-score');
+function forgetEcho(){endEchoCapture();lastEcho=null;lastEchoBuffer=null;lastEchoBlob=null;if(echoButton){echoButton.disabled=true;echoButton.textContent='回响';echoButton.title='先落下终章，再保存回响';}}
+function armEchoButton(){
+ if(!lastEcho||echoCapture)return;
+ echoButton.disabled=false;echoButton.textContent='回响';
+ echoButton.title=lastEchoBlob||lastEchoBuffer?'下载从有到无的回响':'下载从有到无的回响';
+}
+function endEchoCapture(){
+ if(echoCaptureTimer){clearTimeout(echoCaptureTimer);echoCaptureTimer=0;}
+ if(echoCapture&&echoCapture.state==='recording'){try{echoCapture.stop();}catch{} }
+}
+function beginEchoCapture(duration){
+ if(echoCapture||typeof MediaRecorder==='undefined'||!audioContext||!audioBus||muted)return;
+ try{
+  echoCaptureDest=audioContext.createMediaStreamDestination();audioBus.connect(echoCaptureDest);
+  const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm','audio/ogg;codecs=opus'].find(type=>MediaRecorder.isTypeSupported(type));
+  const rec=new MediaRecorder(echoCaptureDest.stream,mime?{mimeType:mime}:{}),chunks=[];
+  rec.ondataavailable=event=>{if(event.data?.size)chunks.push(event.data);};
+  rec.onstop=()=>{
+   try{echoCaptureDest?.disconnect();}catch{}echoCaptureDest=null;
+   if(echoCapture!==rec)return;echoCapture=null;
+   if(lastEcho&&chunks.length)lastEchoBlob=new Blob(chunks,{type:rec.mimeType||chunks[0].type||'audio/webm'});
+   armEchoButton();
+  };
+  echoCapture=rec;rec.start(100);
+  echoCaptureTimer=setTimeout(endEchoCapture,Math.max(800,(duration+.45)*1000));
+ }catch(error){console.warn('Echo capture:',error.message);echoCapture=null;}
+}
+function keepEcho(sequence){
+ if(lastEcho||!sequence?.length)return;
+ lastEcho=sequence.map(({event,delay,volume,length})=>({event:{...event,sound:event.sound?{...event.sound}:null},delay,volume,length}));
+ lastEchoBlob=null;lastEchoBuffer=null;
+ echoButton.disabled=true;echoButton.textContent='收录中…';echoButton.title='正在收录从有到无的回响';
+ renderEcho(lastEcho).then(buffer=>{if(!lastEcho)return;lastEchoBuffer=buffer;armEchoButton();}).catch(error=>console.warn('Echo buffer:',error.message));
+}
+forgetEcho();
 document.querySelector('#clear-curve').addEventListener('click',()=>{
- const events=[...(displayScore||scoreEvents)],layout=scoreLayout(),h=musicCanvas.clientHeight||170;
+ const events=scoreSnapshot(),layout=scoreLayout(),h=musicCanvas.clientHeight||170;
  if(!events.length)return;
+ if(lastEcho)return;
+ const sequence=verticalClearSequence(events,h);
+ keepEcho(sequence);
+ echoHold=true;
  for(const voice of clearVoices){try{voice.stop();}catch{}}clearVoices=[];clearOutput?.disconnect();
  particles=[];clearingFlowers=[];particleStart=performance.now();
- const sequence=verticalClearSequence(events,h);
- const duration=Math.max(0,...sequence.map(({event:e,delay})=>{const p=timbres[clearTone(e).instrument||instrument];return delay+p.attack+p.decay+.05;}));
- unlockAudio();const t=audioContext?.currentTime||0,output=audioContext&&!muted?audioContext.createGain():null;clearOutput=output;clearClock=output?{start:t,duration}:null;
- if(output){output.connect(master);output.gain.value=.65;}
- sequence.forEach(({event:e,delay})=>{
-  const tone=clearTone(e),preset=timbres[tone.instrument||instrument],attack=preset.attack,x=27+e.position-layout.origin-layout.offset,y=flowerY(e,h),alpha=.22+.75*e.strength;
-  if(x>=-30&&x<=layout.width+30){clearingFlowers.push({x,y,delay,pitch:e.pitch,alpha,color:scoreColor(e.pitch)});
-   const points=roses[e.pitch].filter(p=>Math.hypot(p.x,p.y)>.2),count=30;
-   for(let i=0;i<count;i++){const p=points[Math.floor((i+Math.random())*points.length/count)],speed=10+Math.random()**1.4*85;
-    particles.push({pitch:e.pitch,x:x+p.x*23+(Math.random()-.5)*5,y:y+p.y*23+(Math.random()-.5)*5,vx:(Math.random()-.5)*38,vy:-speed,delay:delay+attack,life:Math.max(.2,preset.decay),size:.6+Math.random()*.5,alpha:alpha*(.55+Math.random()*.4),color:scoreColor(e.pitch)});
+ try{
+  unlockAudio();if(audioContext?.resume)audioContext.resume().catch(()=>{});
+  const t=audioContext?audioContext.currentTime:0,output=audioContext&&!muted?audioContext.createGain():null;clearOutput=output;
+  const duration=echoDuration(sequence);
+  clearClock={start:audioContext?t:performance.now()/1000,duration};
+  beginEchoCapture(duration);
+  if(output){output.connect(master);clearVoices=scheduleEcho(sequence,output,t).voices;setTimeout(()=>output.disconnect(),(duration+.2)*1000);}
+  sequence.forEach(({event:e,delay})=>{
+   const tone=clearTone(e),preset=timbres[tone.instrument||instrument],attack=preset.attack,x=27+e.position-layout.origin-layout.offset,y=flowerY(e,h),alpha=.22+.75*e.strength;
+   if(x>=-30&&x<=layout.width+30){clearingFlowers.push({x,y,delay,pitch:e.pitch,alpha,color:scoreColor(e.pitch)});
+    const points=roses[e.pitch].filter(p=>Math.hypot(p.x,p.y)>.2),count=30,start=delay+attack,remain=Math.max(.25,duration-start);
+    for(let i=0;i<count;i++){const p=points[Math.floor((i+Math.random())*points.length/count)],speed=10+Math.random()**1.4*85;
+     particles.push({pitch:e.pitch,x:x+p.x*23+(Math.random()-.5)*5,y:y+p.y*23+(Math.random()-.5)*5,vx:(Math.random()-.5)*38,vy:-speed,delay:start,life:remain*(.2+Math.random()**.85*.8),size:.6+Math.random()*.5,alpha:alpha*(.55+Math.random()*.4),color:scoreColor(e.pitch)});
+    }
    }
-  }
-  if(output)clearVoices.push(...(playTone(tone.f,tone.strength,tone.volume,{output,when:t+delay,instrument:tone.instrument,capture:false})||[]));
- });
- if(output)setTimeout(()=>output.disconnect(),(duration+.2)*1000);
+  });
+ }catch(error){console.warn('Clear echo:',error);}
+ echoHold=false;
  scoreEvents.length=0;scoreEpoch=null;slideTimes.clear();displayScore=null;scorePlayhead=null;scoreOffset=null;hoverFlowers.clear();hoverFlower=null;drawMusicScore();
 });
 drawMusicScore();
