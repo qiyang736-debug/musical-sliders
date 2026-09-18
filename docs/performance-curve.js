@@ -65,29 +65,54 @@ function drawMusicScore(){
 }
 new ResizeObserver(()=>{document.querySelector('.panel').style.setProperty('--score-width',musicCanvas.clientWidth+'px');if(!scoreFrame)scoreFrame=requestAnimationFrame(drawMusicScore);}).observe(musicCanvas);
 let SCORE_SCAN_SPEED=260;
-function clearDuration(count){return Math.min(20,Math.max(5,5+(count-1)*.12));}
+const CLEAR_SCAN_FAST=85,CLEAR_SCAN_SLOW=17,CLEAR_MIN=2,CLEAR_MAX=10;
+function clearDuration(count){return Math.min(CLEAR_MAX,Math.max(CLEAR_MIN,CLEAR_MIN+(count-1)*.12));}
+function clearScanSpeed(count){
+ const t=(clearDuration(count)-CLEAR_MIN)/(CLEAR_MAX-CLEAR_MIN);
+ return CLEAR_SCAN_FAST+(CLEAR_SCAN_SLOW-CLEAR_SCAN_FAST)*t;
+}
+function clearTone(e){
+ const sound=e.sound;
+ if(sound?.kind==='note')return {f:sound.f,strength:sound.strength,volume:sound.volume,instrument:sound.instrument};
+ return {f:scoreFrequencies[e.pitch],strength:e.strength,volume:sound?.volume??1,instrument:sound?.instrument||instrument};
+}
 function verticalClearSequence(events,h){
- const ordered=[...events].sort((a,b)=>flowerY(a,h)-flowerY(b,h)||a.position-b.position),top=ordered.length?flowerY(ordered[0],h):0;
- return ordered.map((event,index)=>({event,delay:(flowerY(event,h)-top)/SCORE_SCAN_SPEED,volume:1-.8*index/Math.max(1,ordered.length-1)}));
+ const ordered=[...events].sort((a,b)=>flowerY(a,h)-flowerY(b,h)||a.position-b.position);
+ if(!ordered.length)return [];
+ const rows=[];
+ for(const event of ordered){
+  const y=flowerY(event,h),last=rows.at(-1);
+  if(last&&y-last.y<1.5)last.events.push(event);
+  else rows.push({y,events:[event]});
+ }
+ const gaps=rows.length-1,ySpan=rows.at(-1).y-rows[0].y,speed=clearScanSpeed(events.length);
+ const naturalEnd=gaps&&ySpan>0?ySpan/speed:0;
+ const scanTime=gaps?Math.min(CLEAR_MAX,Math.max(CLEAR_MIN,Math.max(naturalEnd,clearDuration(events.length)))):0;
+ const extra=gaps&&scanTime>naturalEnd?(scanTime-naturalEnd)/gaps:0;
+ const scale=naturalEnd>0&&scanTime<naturalEnd?scanTime/naturalEnd:1;
+ return rows.flatMap((row,i)=>{
+  const delay=(ySpan>0?(row.y-rows[0].y)/speed:0)*scale+extra*i;
+  return row.events.map(event=>({event,delay}));
+ });
 }
 document.querySelector('#clear-curve').addEventListener('click',()=>{
  const events=[...(displayScore||scoreEvents)],layout=scoreLayout(),h=musicCanvas.clientHeight||170;
  if(!events.length)return;
  for(const voice of clearVoices){try{voice.stop();}catch{}}clearVoices=[];clearOutput?.disconnect();
  particles=[];clearingFlowers=[];particleStart=performance.now();
- const duration=clearDuration(events.length),sequence=verticalClearSequence(events,h);
+ const sequence=verticalClearSequence(events,h);
+ const duration=Math.max(0,...sequence.map(({event:e,delay})=>{const p=timbres[clearTone(e).instrument||instrument];return delay+p.attack+p.decay+.05;}));
  unlockAudio();const t=audioContext?.currentTime||0,output=audioContext&&!muted?audioContext.createGain():null;clearOutput=output;clearClock=output?{start:t,duration}:null;
- if(output){output.connect(master);output.gain.value=.65/Math.sqrt(Math.max(1,events.length));}
- sequence.forEach(({event:e,delay,volume})=>{
-  const attack=timbres[e.sound?.instrument||instrument].attack,life=duration-delay,x=27+e.position-layout.origin-layout.offset,y=flowerY(e,h),alpha=.22+.75*e.strength;
+ if(output){output.connect(master);output.gain.value=.65;}
+ sequence.forEach(({event:e,delay})=>{
+  const tone=clearTone(e),preset=timbres[tone.instrument||instrument],attack=preset.attack,x=27+e.position-layout.origin-layout.offset,y=flowerY(e,h),alpha=.22+.75*e.strength;
   if(x>=-30&&x<=layout.width+30){clearingFlowers.push({x,y,delay,pitch:e.pitch,alpha,color:scoreColor(e.pitch)});
-   // A bounded, dispersed sample avoids piling up particles at petal intersections.
    const points=roses[e.pitch].filter(p=>Math.hypot(p.x,p.y)>.2),count=30;
    for(let i=0;i<count;i++){const p=points[Math.floor((i+Math.random())*points.length/count)],speed=10+Math.random()**1.4*85;
-    particles.push({pitch:e.pitch,x:x+p.x*23+(Math.random()-.5)*5,y:y+p.y*23+(Math.random()-.5)*5,vx:(Math.random()-.5)*38,vy:-speed,delay:delay+attack,life:life-attack,size:.6+Math.random()*.5,alpha:alpha*(.55+Math.random()*.4),color:scoreColor(e.pitch)});
+    particles.push({pitch:e.pitch,x:x+p.x*23+(Math.random()-.5)*5,y:y+p.y*23+(Math.random()-.5)*5,vx:(Math.random()-.5)*38,vy:-speed,delay:delay+attack,life:Math.max(.2,preset.decay),size:.6+Math.random()*.5,alpha:alpha*(.55+Math.random()*.4),color:scoreColor(e.pitch)});
    }
   }
-  if(output)clearVoices.push(...(playTone(scoreFrequencies[e.pitch],1,volume,{output,when:t+delay,fadeUntil:t+duration,instrument:e.sound?.instrument||instrument,capture:false})||[]));
+  if(output)clearVoices.push(...(playTone(tone.f,tone.strength,tone.volume,{output,when:t+delay,instrument:tone.instrument,capture:false})||[]));
  });
  if(output)setTimeout(()=>output.disconnect(),(duration+.2)*1000);
  scoreEvents.length=0;scoreEpoch=null;slideTimes.clear();displayScore=null;scorePlayhead=null;scoreOffset=null;hoverFlowers.clear();hoverFlower=null;drawMusicScore();
