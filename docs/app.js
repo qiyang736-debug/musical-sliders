@@ -6,10 +6,15 @@ const frequencies=[261.63,293.66,329.63,349.23,392,440,493.88];
 const definitions=noteNames.map((name,i)=>[name,0,100,[72,58,84,65,78,54,68][i],v=>Math.round(v)+'%',1]);
 let active=null,last=null,frame=0;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-let audioContext=null,master=null,muted=false,audioBus=null;
+let audioContext=null,master=null,muted=false,audioBus=null,audioPrimed=false;
 function unlockAudio(){
- try{if(!audioContext){const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;audioContext=new Audio();master=audioContext.createGain();master.gain.value=.65;const limiter=audioContext.createDynamicsCompressor();audioBus=limiter;master.connect(limiter);limiter.connect(audioContext.destination);}if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});}catch{}
+ try{
+  if(!audioContext){const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;audioContext=new Audio();master=audioContext.createGain();master.gain.value=.65;const limiter=audioContext.createDynamicsCompressor();audioBus=limiter;master.connect(limiter);limiter.connect(audioContext.destination);}
+  if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});
+  if(!audioPrimed){const buf=audioContext.createBuffer(1,1,audioContext.sampleRate||44100),src=audioContext.createBufferSource();src.buffer=buf;src.connect(audioContext.destination);src.start(0);audioPrimed=true;}
+ }catch{}
 }
+['pointerdown','touchstart','click'].forEach(type=>window.addEventListener(type,unlockAudio,{capture:true,passive:true}));
 const timbres={
  marimba:{attack:.002,decay:.7,partials:[[1,1],[4,.26],[10,.045]],damping:1.3,type:'sine'},
  pipa:{attack:.003,decay:.95,partials:[[1,1],[2,.52],[3,.16],[4,.28],[5,.05],[6,.12],[8,.045]],damping:.72,type:'triangle'},
@@ -25,7 +30,19 @@ function stringVolume(index,value=rows[index].value){return clamp(value/100,0,1)
 function playNote(index,strength,volume=stringVolume(index)){playTone(frequencies[index],strength,volume);}
 function playTone(f,strength,volume=1,options={}){
  const context=options.context||audioContext,output=options.output||master;
- if(!context||(!options.context&&(muted||context.state!=='running'))||volume<=0)return;
+ if(!context||volume<=0)return;
+ if(!options.context){
+  if(muted)return;
+  if(context.state!=='running'){
+   unlockAudio();
+   if(options.capture!==false){
+    if(typeof recordScoreEvent==='function')recordScoreEvent({kind:'note',f,strength,volume,instrument});
+    if(typeof recordMusicNote==='function')recordMusicNote(f,clamp(strength*volume,0,1),'note',options.scoreGroup);
+   }
+   context.resume().then(()=>{if(!muted&&context.state==='running')playTone(f,strength,volume,{...options,capture:false});}).catch(()=>{});
+   return;
+  }
+ }
  if(options.capture!==false){
   if(typeof recordScoreEvent==='function')recordScoreEvent({kind:'note',f,strength,volume,instrument});
   if(typeof recordMusicNote==='function')recordMusicNote(f,clamp(strength*volume,0,1),'note',options.scoreGroup);
@@ -54,7 +71,7 @@ document.querySelector('#instrument').addEventListener('change',event=>{
 let slideVoice=null,slideSoundActive=false;
 function stopSlide(){if(slideSoundActive&&typeof recordScoreEvent==='function')recordScoreEvent({kind:'slide-stop'});slideSoundActive=false;if(slideVoice&&audioContext){const t=audioContext.currentTime;slideVoice.gain.gain.cancelScheduledValues(t);slideVoice.gain.gain.setTargetAtTime(0,t,.015);}}
 function playSlide(index,speed){
- if(muted||!audioContext||audioContext.state!=='running'||speed<2)return;
+ if(muted||!audioContext||speed<2)return;if(audioContext.state!=='running'){unlockAudio();return;}
  if(!slideVoice){
   const source=audioContext.createOscillator(),gain=audioContext.createGain();
   source.type='triangle';gain.gain.value=0;
@@ -72,7 +89,7 @@ function playSlide(index,speed){
 }
 function boundaryEntered(previous,next,w){return(previous>0&&next<=0)||(previous<w&&next>=w);}
 function playBoundary(s,speed){
- if(muted||!audioContext||audioContext.state!=='running')return;
+ if(muted||!audioContext)return;if(audioContext.state!=='running'){unlockAudio();return;}
  const t=audioContext.currentTime;if(t-(s.lastBoundarySound??-Infinity)<.075)return;s.lastBoundarySound=t;
  const force=clamp(speed/900,0,1);
  // Same instrument envelope and harmonics, one octave above the first string.
