@@ -11,11 +11,14 @@ function unlockAudio(){
  try{if(!audioContext){const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;audioContext=new Audio();master=audioContext.createGain();master.gain.value=.65;const limiter=audioContext.createDynamicsCompressor();audioBus=limiter;master.connect(limiter);limiter.connect(audioContext.destination);}if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});}catch{}
 }
 const timbres={
- pluck:{attack:.004,decay:1.3,partials:[[1,1],[2,.31],[3,.15],[4,.095]],damping:.45,type:'sine'},
- piano:{attack:.003,decay:2,partials:[[1,1],[2,.48],[3,.23],[4,.13],[5,.07],[7,.025]],damping:.4,type:'sine'},
  marimba:{attack:.002,decay:.7,partials:[[1,1],[4,.26],[10,.045]],damping:1.3,type:'sine'},
+ pipa:{attack:.003,decay:.95,partials:[[1,1],[2,.52],[3,.16],[4,.28],[5,.05],[6,.12],[8,.045]],damping:.72,type:'triangle'},
+ pluck:{attack:.004,decay:1.3,partials:[[1,1],[2,.31],[3,.15],[4,.095]],damping:.45,type:'sine'},
+ erhu:{attack:.035,decay:1.8,partials:[[1,1],[2,.18],[3,.46],[4,.07],[5,.22],[6,.04]],damping:.26,type:'sawtooth'},
+ piano:{attack:.003,decay:2,partials:[[1,1],[2,.48],[3,.23],[4,.13],[5,.07],[7,.025]],damping:.4,type:'sine'},
+ harp:{attack:.004,decay:2.45,partials:[[1,1],[2,.4],[3,.14],[4,.2],[5,.06],[6,.09],[8,.035]],damping:.36,type:'sine'},
  bell:{attack:.003,decay:3,partials:[[1,1],[2.756,.35],[5.404,.15],[8.933,.055]],damping:.24,type:'sine'},
- synth:{attack:.04,decay:1.1,partials:[[1,1],[2,.14]],damping:.25,type:'triangle'}
+ bianzhong:{attack:.002,decay:3.4,partials:[[1,1],[1.49,.42],[2.14,.2],[2.71,.11],[3.89,.07],[5.43,.035]],damping:.16,type:'sine'}
 };
 let instrument='pluck';
 function stringVolume(index,value=rows[index].value){return clamp(value/100,0,1);}
@@ -27,7 +30,7 @@ function playTone(f,strength,volume=1,options={}){
   if(typeof recordScoreEvent==='function')recordScoreEvent({kind:'note',f,strength,volume,instrument});
   if(typeof recordMusicNote==='function')recordMusicNote(f,clamp(strength*volume,0,1),'note',options.scoreGroup);
  }
- const t=options.when??context.currentTime,preset=timbres[options.instrument||instrument],voices=[];
+ const t=options.when??context.currentTime,preset=timbres[options.instrument||instrument]||timbres.pluck,voices=[];
  const normalization=preset.partials.reduce((total,p)=>total+p[1],0);
  preset.partials.forEach(([ratio,weight],i)=>{
   const oscillator=context.createOscillator(),gain=context.createGain();
@@ -86,11 +89,12 @@ function pluckString(target,hit,speed,volume=stringVolume(target.index)){
  target.vibration={age:0,strength,hit};target.row.classList.toggle('vibrating',true);
  playNote(target.index,strength,volume);wake();
 }
+function stringY(s){return s.row.offsetTop+s.track.offsetTop+22;}
 function crossStrings(source,a,b,dt){
- const base=source.row.offsetTop+36;
+ const base=stringY(source);
  for(const target of rows){if(target===source)continue;
   const offset=source.track.offsetLeft-target.track.offsetLeft;
-  const hit=crossing({x:a.x+offset,y:base+a.y},{x:b.x+offset,y:base+b.y},target.row.offsetTop+36,clamp(target.x,0,width(target)));
+  const hit=crossing({x:a.x+offset,y:base+a.y},{x:b.x+offset,y:base+b.y},stringY(target),clamp(target.x,0,width(target)));
   if(hit===null)continue;
   if(Math.abs(hit-target.x)<14&&Math.abs(target.y)<1)continue;
   // Impact acceleration estimate = normal velocity change / 20 ms contact time.
@@ -106,7 +110,7 @@ function animateString(s,dt){
  s.wave.setAttribute('d',d);return true;
 }
 const rows=definitions.map(([name,min,max,value,format,step],index)=>{
- const row=document.createElement('div');row.className='row';row.innerHTML='<div class="label"><span>'+name+'</span><span class="value"></span></div><div class="track"><div class="line"></div><div class="fill"></div><svg class="string-wave" aria-hidden="true"><path/></svg><div class="thumb" role="slider" tabindex="0"></div></div>';panel.append(row);
+ const row=document.createElement('div');row.className='row';row.innerHTML='<span class="note-name">'+name+'</span><div class="track"><div class="line"></div><div class="fill"></div><svg class="string-wave" aria-hidden="true"><path/></svg><div class="thumb" role="slider" tabindex="0"></div></div><span class="value"></span>';panel.append(row);
  const s={name,min,max,value,initial:value,format,step,index,row,track:row.querySelector('.track'),thumb:row.querySelector('.thumb'),fill:row.querySelector('.fill'),output:row.querySelector('.value'),x:0,y:0,vx:0,vy:0,mode:'idle',age:0,bounces:0,wave:row.querySelector('.string-wave path'),vibration:null};
  s.thumb.setAttribute('aria-label',name);s.thumb.setAttribute('aria-valuemin',min);s.thumb.setAttribute('aria-valuemax',max);
  s.track.addEventListener('pointerdown',e=>down(e,s));s.thumb.addEventListener('keydown',e=>{let v=s.value;if(['ArrowRight','ArrowUp'].includes(e.key))v+=step*(e.shiftKey?10:1);else if(['ArrowLeft','ArrowDown'].includes(e.key))v-=step*(e.shiftKey?10:1);else if(e.key==='Home')v=min;else if(e.key==='End')v=max;else return;e.preventDefault();stop(s);setValue(s,v);});
@@ -120,7 +124,7 @@ function local(e,s){const r=s.track.getBoundingClientRect();return{x:e.clientX-r
 function down(e,s){if(e.button!==0||active)return;e.preventDefault();if(typeof stopScorePlayback==='function')stopScorePlayback();unlockAudio();stop(s);const p=local(e,s);if(!e.target.closest('.thumb'))setValue(s,s.min+clamp(p.x/width(s),0,1)*(s.max-s.min));active=s;s.mode='drag';s.anchor=s.x;s.start=p;s.offset=p.x-s.x;s.pulled=false;s.pointer=e.pointerId;s.dragTime=performance.now();s.track.setPointerCapture(e.pointerId);s.thumb.focus({preventScroll:true});paint(s);}
 // One shared simulation drives both the guide and playback.
 function verticalBounds(s){
- const base=s.row.offsetTop+36,radius=6.5;
+ const base=stringY(s),radius=6.5;
  return{min:-64+radius-base,max:panel.clientHeight+64-radius-base};
 }
 function trajectory(s,seed=null){
@@ -140,7 +144,14 @@ function trajectory(s,seed=null){
   let impactSpeed=0,boundarySpeed=0,ballHits=[];
   vy+=(phase==='rebound'?reboundGravity:1250)*gravitySign*dt;x+=vx*dt;y+=vy*dt;
   if(y<lower||y>upper){
-   boundarySpeed=Math.abs(vy);y=clamp(y,lower,upper);vy*=-.5;
+   const far=y>=upper;
+   boundarySpeed=Math.abs(vy);y=clamp(y,lower,upper);
+   if(far){
+    if(Math.abs(vy)<110){landing=landing||snap(x);y=0;vy=0;vx=0;phase='landed';}
+    else vy=-Math.max(170,Math.abs(vy)*.72);
+   }else{
+    vy=Math.max(90,Math.abs(vy)*.55);
+   }
   }
   for(const obstacle of obstacles){
    let dx=x-obstacle.x,dy=y-obstacle.y,d=Math.hypot(dx,dy);if(d>=13)continue;
@@ -176,7 +187,7 @@ function trajectory(s,seed=null){
  points[points.length-1]={...points[points.length-1],x:target,y:0,phase:'landed'};
  return{points,h,duration:(points.length-1)*h,target,value,bounces,direction};
 }
-function draw(s){svg.replaceChildren();if(!s.pulled||s.mode!=='drag')return;const x0=s.track.offsetLeft+140,y0=s.row.offsetTop+36+170;const make=(tag,attrs)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));svg.append(e);return e;};const p=trajectory(s);
+function draw(s){svg.replaceChildren();if(!s.pulled||s.mode!=='drag')return;const x0=s.track.offsetLeft+140,y0=stringY(s)+170;const make=(tag,attrs)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));svg.append(e);return e;};const p=trajectory(s);
  make('path',{d:`M ${x0+s.anchor-9} ${y0} L ${x0+s.x} ${y0+s.y} L ${x0+s.anchor+9} ${y0}`,fill:'none',stroke:'#7664ed','stroke-width':1.2,opacity:.8});
  let d='';for(let i=0;i<p.points.length;i++){if(i%6!==0&&i!==p.points.length-1)continue;const {x,y}=p.points[i];d+=(i?'L':'M')+(x0+x)+' '+(y0+y)+' ';}make('path',{d,fill:'none',stroke:'#81818e','stroke-width':1,'stroke-dasharray':'1 6','stroke-linecap':'round',opacity:.65});
  make('path',{d:`M ${x0+p.target} ${y0-6} v12`,stroke:'#8070ff','stroke-width':1});const text=make('text',{x:x0+p.target,y:y0-13,fill:'#8474ee','text-anchor':'middle','font-size':11,'font-family':'monospace'});text.textContent=s.format(p.value);
@@ -250,7 +261,7 @@ function tick(time){
 
 function wake(){if(!frame){last=null;frame=requestAnimationFrame(tick);}}
 function reset(){stopSlide();for(const s of rows){stop(s);s.vibration=null;s.row.classList.toggle('vibrating',false);s.wave.setAttribute('d','');setValue(s,s.initial);}}
-document.querySelector('#reset').addEventListener('click',reset);window.addEventListener('blur',()=>{if(active){const s=active;stop(s);setValue(s,s.value);}});new ResizeObserver(()=>{for(const s of rows){stop(s);setValue(s,s.value);}}).observe(panel);reset();
+const resetButton=document.querySelector('#reset');if(resetButton)resetButton.addEventListener('click',reset);window.addEventListener('blur',()=>{if(active){const s=active;stop(s);setValue(s,s.value);}});new ResizeObserver(()=>{for(const s of rows){stop(s);setValue(s,s.value);}}).observe(panel);reset();
 if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'set_string_lengths',description:'Set the active white length of musical strings, from 0 to 100 percent.',inputSchema:{type:'object',properties:Object.fromEntries(noteNames.map(k=>[k,{type:'number',minimum:0,maximum:100}])),additionalProperties:false},annotations:{readOnlyHint:false},execute(input){if(!input||typeof input!=='object'||Object.keys(input).some(k=>!noteNames.includes(k)||!Number.isFinite(input[k])||input[k]<0||input[k]>100))throw Error('Invalid string lengths');noteNames.forEach((k,i)=>{if(k in input){stop(rows[i]);setValue(rows[i],input[k]);}});return Object.fromEntries(noteNames.map((k,i)=>[k,rows[i].value]));}})).catch(()=>{});}catch{}}
 
-document.querySelector('#sound').addEventListener('click',()=>{unlockAudio();muted=!muted;if(typeof syncScoreMute==='function')syncScoreMute();if(muted)stopSlide();if(master)master.gain.setTargetAtTime(muted?0:.65,audioContext.currentTime,.02);const button=document.querySelector('#sound');button.textContent=muted?'声音关':'声音开';button.setAttribute('aria-pressed',String(!muted));});
+document.querySelector('#sound').addEventListener('click',()=>{unlockAudio();muted=!muted;if(typeof syncScoreMute==='function')syncScoreMute();if(muted)stopSlide();if(master)master.gain.setTargetAtTime(muted?0:.65,audioContext.currentTime,.02);const button=document.querySelector('#sound');const label=muted?'声音关':'声音开';button.setAttribute('aria-pressed',String(!muted));button.setAttribute('aria-label',label);button.title=label;});

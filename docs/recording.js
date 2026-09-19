@@ -1,5 +1,6 @@
 'use strict';
 const recordButton=document.querySelector('#record');
+if(recordButton){
 const recordStatus=document.querySelector('#record-status');
 const recordList=document.querySelector('#record-list');
 let recorder=null,recordDestination=null,recordTimer=null,recordStart=0,takeCount=0;
@@ -45,3 +46,4 @@ recordButton.addEventListener('click',()=>{
 });
 if(typeof MediaRecorder==='undefined'){recordButton.disabled=true;recordButton.title='当前浏览器不支持录音';recordStatus.textContent='当前浏览器不支持录音，可使用新版 Chrome 或 Safari。';}
 window.addEventListener('pagehide',()=>{clearInterval(recordTimer);endScoreCapture();for(const url of recordingURLs)URL.revokeObjectURL(url);});
+}
