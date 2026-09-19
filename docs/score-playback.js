@@ -29,66 +29,10 @@ async function renderScore(score){
  }
  slide.stop(score.duration);return context.startRendering();
 }
-function rowForScoreEvent(e){
- if(typeof rows==='undefined')return null;
- let i=e.index;
- if(i==null&&e.f!=null)i=frequencies.reduce((best,v,k)=>Math.abs(v-e.f)<Math.abs(frequencies[best]-e.f)?k:best,0);
- if(i==null&&e.pitch!=null)i=e.pitch>6?0:e.pitch;
- if(i==null||i<0||i>6)return null;
- return rows[i];
-}
-function resetScoreHops(){
- if(typeof rows==='undefined')return;
- for(const s of rows){if(s.mode==='drag'||s.mode==='flight')continue;if(s.y){s.y=0;paint(s);}}
-}
-function makeReplayFlight(row,strength){
- const keep={x:row.x,y:row.y,anchor:row.anchor,value:row.value,mode:row.mode};
- const modes=rows.map(r=>r.mode);
- for(const r of rows)if(r!==row)r.mode='replay';
- const force=clamp(strength??.5,.08,1),bounds=verticalBounds(row);
- const pull=Math.min(Math.max(8,bounds.max*.88),36+force*72);
- row.anchor=row.x;row.y=pull;
- const flight=trajectory(row);
- rows.forEach((r,i)=>r.mode=modes[i]);
- Object.assign(row,keep);
- return flight;
-}
-function flightPose(flight,age){
- if(!flight?.points?.length)return {y:0,done:true};
- if(age>=flight.duration)return {x:flight.target,y:0,done:true};
- const progress=clamp(age/flight.h,0,flight.points.length-1),i=Math.min(Math.floor(progress),flight.points.length-2),f=progress-i;
- const a=flight.points[i],b=flight.points[i+1];
- return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f,done:false};
-}
-function prepareScoreHops(score){
- if(!score?.events||typeof rows==='undefined')return;
- for(const e of score.events){
-  if(e.kind&&e.kind!=='note')continue;
-  const row=rowForScoreEvent(e);
-  if(row)e._hop=makeReplayFlight(row,e.strength);
- }
-}
-function syncBallReplay(playhead){
- if(typeof rows==='undefined'||!scorePlayback?.score)return;
- const poses=new Array(7).fill(null);
- for(const e of scorePlayback.score.events||[]){
-  if(e.kind&&e.kind!=='note')continue;
-  const row=rowForScoreEvent(e);if(!row)continue;
-  const flight=e._hop||(e._hop=makeReplayFlight(row,e.strength));
-  const age=playhead-e.time;if(age<0||age>flight.duration)continue;
-  poses[row.index]=flightPose(flight,age);
- }
- for(const s of rows){
-  if(s.mode==='drag'||s.mode==='flight')continue;
-  const pose=poses[s.index],y=pose?pose.y:0;
-  if(s.y!==y){s.y=y;paint(s);}
- }
-}
 function stopScorePlayback(){
  scoreGeneration++;
  const p=scorePlayback;if(!p)return;scorePlayback=null;
  cancelAnimationFrame(p.frame);if(p.source){p.source.onended=null;try{p.source.stop();}catch{}p.source.disconnect();}p.gain?.disconnect();p.button.textContent=p.button.dataset.label||'奏响此刻';
- resetScoreHops();
 }
 function syncScoreMute(){if(scorePlayback?.gain)scorePlayback.gain.gain.setTargetAtTime(muted?0:1,audioContext.currentTime,.01);}
 function pauseScorePlayback(){const p=scorePlayback;if(!p||p.paused)return;p.offset=Math.min(p.score.duration,p.offset+audioContext.currentTime-p.started);p.paused=true;p.source.onended=null;p.source.stop();p.source.disconnect();p.gain.disconnect();cancelAnimationFrame(p.frame);p.button.textContent=p.button.dataset.label?p.button.dataset.label+' · 继续':'继续播放';}
@@ -96,7 +40,7 @@ function resumeScorePlayback(){
  const p=scorePlayback;if(!p)return;p.paused=false;
  const source=audioContext.createBufferSource(),gain=audioContext.createGain();source.buffer=p.buffer;gain.gain.value=muted?0:1;source.connect(gain);gain.connect(audioContext.destination);p.source=source;p.gain=gain;p.started=audioContext.currentTime;
  source.onended=()=>{if(scorePlayback!==p)return;scorePlayhead=p.score.duration;drawMusicScore();stopScorePlayback();};source.start(0,p.offset);p.button.textContent=p.button.dataset.label?p.button.dataset.label+' · 暂停':'暂停';
- const animate=()=>{if(scorePlayback!==p||p.paused)return;scorePlayhead=p.offset+audioContext.currentTime-p.started;followScorePlayhead();syncBallReplay(scorePlayhead);drawMusicScore();p.frame=requestAnimationFrame(animate);};animate();
+ const animate=()=>{if(scorePlayback!==p||p.paused)return;scorePlayhead=p.offset+audioContext.currentTime-p.started;followScorePlayhead();drawMusicScore();p.frame=requestAnimationFrame(animate);};animate();
 }
 async function toggleScorePlayback(score,button){
  if(scorePlayback?.button===button){if(scorePlayback.loading)return;if(scorePlayback.paused){await audioContext.resume();resumeScorePlayback();}else pauseScorePlayback();return;}
@@ -104,7 +48,7 @@ async function toggleScorePlayback(score,button){
  const generation=scoreGeneration;button.textContent=button.dataset.label?button.dataset.label+' · 准备中':'准备播放…';
  scorePlayback={score,button,loading:true,offset:0,frame:0};
  try{unlockAudio();await audioContext.resume();const buffer=await renderScore(score);if(generation!==scoreGeneration)return;
-  Object.assign(scorePlayback,{buffer,loading:false});displayedAudioScore=score;displayScore=score.graphics||[];if(displayScore.length&&typeof forgetEcho==='function')forgetEcho();scorePlayhead=0;scoreOffset=0;prepareScoreHops(score);resumeScorePlayback();
+  Object.assign(scorePlayback,{buffer,loading:false});displayedAudioScore=score;displayScore=score.graphics||[];if(displayScore.length&&typeof forgetEcho==='function')forgetEcho();scorePlayhead=0;scoreOffset=0;resumeScorePlayback();
  }catch(error){if(generation!==scoreGeneration)return;stopScorePlayback();button.textContent='重试播放';console.warn('Score playback:',error.message);}
 }
 function downloadBlob(blob,name){
